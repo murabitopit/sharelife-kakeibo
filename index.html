@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>資産管理</title>
+<link rel="manifest" href="manifest.webmanifest" />
+<meta name="theme-color" content="#1b6f5c" />
+<link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+<header class="appbar">
+  <div class="tabs" id="spaceTabs">
+    <button class="tab active" data-space="personal">🧑自分</button>
+    <button class="tab" data-space="partner">👩彼女</button>
+    <button class="tab" data-space="shared">🤝同棲</button>
+  </div>
+</header>
+
+<main id="app">
+  <section class="month-bar">
+    <span id="monthLabel"></span>
+  </section>
+
+  <section id="tabContent"></section>
+</main>
+
+<button class="fab" id="addBtn">＋</button>
+
+<nav class="bottom-tabs" id="bottomTabs">
+  <button class="bottom-tab active" data-tab="budget"><span class="bt-icon">📊</span><span>今月の予算</span></button>
+  <button class="bottom-tab" data-tab="calendar"><span class="bt-icon">📅</span><span>収支履歴</span></button>
+  <button class="bottom-tab" data-tab="assets"><span class="bt-icon">💴</span><span>資産</span></button>
+  <button class="bottom-tab" data-tab="report"><span class="bt-icon">📄</span><span>レポート</span></button>
+  <button class="bottom-tab" data-tab="settings"><span class="bt-icon">⚙️</span><span>設定</span></button>
+</nav>
+
+<!-- 取引追加 / カテゴリ詳細 / 日別内訳 -->
+<div class="sheet-overlay" id="sheetOverlay">
+  <div class="sheet" id="sheet"></div>
+</div>
+
+<!-- レポートタブ(Excel/PDF書き出し)用。読み込めない場合はレポートタブ内でその旨を表示する -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+
+<script src="js/store.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/report.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+{
+  "name": "資産管理",
+  "short_name": "資産管理",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#f5f6f4",
+  "theme_color": "#1b6f5c",
+  "icons": []
+}
