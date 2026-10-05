@@ -202,6 +202,9 @@ function migrateCategoryNames(data) {
     const sp = data.spaces[key];
     if (sp && !sp.unresolvedBackfills) sp.unresolvedBackfills = [];
   }
+  if (!data.settings.lock) {
+    data.settings.lock = { personal: null, partner: null };
+  }
   if (!data.settings.defaultTemplate) {
     data.settings.defaultTemplate = defaultBudgetTemplate();
   }
@@ -292,6 +295,7 @@ function defaultData() {
     settings: {
       ratioSelf: 0.6, // 同棲資金のうち自分(🧑)が負担する割合。彼女(👩)の割合は1-ratioSelf
       defaultTemplate: defaultBudgetTemplate(), // 開発用タブで編集・再適用できるデフォルト予算額
+      lock: { personal: null, partner: null }, // 個人タブの画面ロック設定(PIN/Face ID)。同棲タブは対象外
     },
     spaces: {
       personal: newSpace('personal'), // 🧑自分

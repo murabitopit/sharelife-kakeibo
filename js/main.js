@@ -8,6 +8,10 @@ let assetExpanded = { carried: true, remaining: true }; // 資産タブの内訳
 let editingTxId = null; // 収支履歴から編集中の取引ID
 let pieSelected = {}; // 円グラフでタップ中の項目名(chartId -> name)。'budget'/'carried'/'remaining'
 
+// 画面ロック関連
+let sessionUnlocked = new Set(); // このページ読み込み中に解除済みの空間('personal'/'partner')。リロードでリセット
+let pendingSpaceKey = null; // ロック画面を解除した後に切り替える予定の空間
+
 // 収支記録シートのウィザード状態
 let quickAddTree = 'own'; // 'own'(現在のタブの自分のカテゴリ) | 'sharedfund'(個人タブから同棲資金へ寄り道)
 let quickAddParentId = null; // 子カテゴリ選択中の親。'__other__'は固定引き落とし一覧
@@ -34,6 +38,8 @@ const el = {
   bottomTabs: document.getElementById('bottomTabs'),
   sheetOverlay: document.getElementById('sheetOverlay'),
   sheet: document.getElementById('sheet'),
+  lockOverlay: document.getElementById('lockOverlay'),
+  lockContent: document.getElementById('lockContent'),
 };
 
 function space() { return data.spaces[spaceKey]; }
@@ -84,6 +90,44 @@ function closeSheet() {
   txPayer = 'self';
   editingTxId = null;
 }
+// 画面ロック:呼べる空間('personal'/'partner')への切り替えをロック経由にする。
+// ロック不要ならそのまま切り替え、ロックが必要ならロック画面を出して結果を待つ。
+function requestSpace(target) {
+  if (Lock.isSpaceLocked(data, target, sessionUnlocked)) {
+    pendingSpaceKey = target;
+    openLockScreen(target);
+    return;
+  }
+  spaceKey = target;
+  calendarViewKey = null;
+  renderApp();
+}
+
+function openLockScreen(targetSpaceKey) {
+  el.lockContent.innerHTML = Lock.lockScreenHtml(targetSpaceKey, data);
+  el.lockOverlay.classList.add('open');
+  if (Lock.hasWebauthn(data, targetSpaceKey)) {
+    Lock.tryWebauthnUnlock(data, targetSpaceKey).then(ok => {
+      if (ok && pendingSpaceKey === targetSpaceKey) completeUnlock(targetSpaceKey);
+    });
+  }
+}
+function closeLockScreen() {
+  el.lockOverlay.classList.remove('open');
+  pendingSpaceKey = null;
+}
+function completeUnlock(targetSpaceKey) {
+  sessionUnlocked.add(targetSpaceKey);
+  closeLockScreen();
+  spaceKey = targetSpaceKey;
+  calendarViewKey = null;
+  renderApp();
+}
+function showLockError(msg) {
+  const box = document.getElementById('lockError');
+  if (box) box.textContent = msg;
+}
+
 function updateAllocationBox() {
   const box = document.getElementById('allocationBox');
   if (box) box.innerHTML = allocationBoxHtml(space());
@@ -231,6 +275,18 @@ function editTotalSheetHtml() {
     <h2>現在の合計金額を修正</h2>
     <div class="field"><label>新しい合計金額</label><input type="number" id="newTotal" value="${Math.round(total)}" /></div>
     <button class="btn" id="saveTotalBtn">保存</button>
+    <button class="btn secondary" id="txCancel">キャンセル</button>
+  `;
+}
+
+function setPinSheetHtml(spaceKey_) {
+  const label = spaceKey_ === 'partner' ? '👩彼女' : '🧑自分';
+  return `
+    <h2>${label}のPINコードを設定</h2>
+    <div class="field"><label>新しいPIN(4〜8桁の数字)</label><input type="password" inputmode="numeric" pattern="[0-9]*" id="newPin1" maxlength="8" /></div>
+    <div class="field"><label>確認のため、もう一度</label><input type="password" inputmode="numeric" pattern="[0-9]*" id="newPin2" maxlength="8" /></div>
+    <div class="hint" id="setPinError" style="color:var(--over); min-height:16px"></div>
+    <button class="btn" id="setPinSave" data-space="${spaceKey_}">保存</button>
     <button class="btn secondary" id="txCancel">キャンセル</button>
   `;
 }
@@ -405,6 +461,8 @@ function budgetSettingsHtml() {
       <h3>同棲資金(表示のみ)</h3>
       <p class="hint">金額・割合の編集は「同棲」タブの設定から行います。</p>
       <div class="settings-list">${sharedFundRowsHtml(true, myRatio)}${sharedFundTotalsHtml(myRatio)}</div>
+
+      ${Lock.lockSettingsHtml(data, spaceKey)}
     `;
   } else {
     html += `
@@ -652,9 +710,7 @@ function settingsTabHtml() {
 el.tabs.addEventListener('click', (e) => {
   const btn = e.target.closest('.tab');
   if (!btn) return;
-  spaceKey = btn.dataset.space;
-  calendarViewKey = null;
-  renderApp();
+  requestSpace(btn.dataset.space);
 });
 
 el.bottomTabs.addEventListener('click', (e) => {
@@ -697,6 +753,32 @@ el.tabContent.addEventListener('click', (e) => {
     if (guardOnce(reportPdfBtn)) return;
     const mk = reportPdfBtn.dataset.reportpdf;
     Report.renderHtmlToPdf(Report.monthReportHtml(data, mk), `資産管理レポート_${mk}.pdf`);
+    return;
+  }
+
+  if (e.target.id === 'lockSetPin') {
+    openSheet(setPinSheetHtml(e.target.dataset.space));
+    return;
+  }
+  if (e.target.id === 'lockClear') {
+    if (guardOnce(e.target)) return;
+    if (!confirm('画面ロックを解除します。よろしいですか?')) return;
+    Lock.clearLock(data, e.target.dataset.space);
+    persist();
+    renderApp();
+    return;
+  }
+  if (e.target.id === 'lockSetWebauthn') {
+    if (guardOnce(e.target)) return;
+    const sp = e.target.dataset.space;
+    const label = sp === 'partner' ? '👩彼女' : '🧑自分';
+    Lock.registerWebauthn(data, sp, label).then(() => {
+      persist();
+      renderApp();
+    }).catch(() => {
+      alert('Face ID/指紋の登録に失敗しました(キャンセルされたか、この端末では使えない可能性があります)');
+      e.target.dataset.firing = '';
+    });
     return;
   }
 
@@ -825,6 +907,12 @@ el.tabContent.addEventListener('click', (e) => {
 });
 
 el.tabContent.addEventListener('change', (e) => {
+  if (e.target.id === 'lockDeviceOwner') {
+    const sp = e.target.dataset.space;
+    Lock.setDeviceOwner(e.target.checked ? sp : null);
+    renderApp();
+    return;
+  }
   if (e.target.id === 'incomeEdit') {
     space().months[key()].income = Number(e.target.value) || 0;
     persist();
@@ -899,6 +987,23 @@ el.sheet.addEventListener('pointerdown', onDragPointerDown);
 
 el.sheet.addEventListener('click', (e) => {
   if (e.target.id === 'txCancel') { closeSheet(); return; }
+
+  if (e.target.id === 'setPinSave') {
+    if (guardOnce(e.target)) return;
+    const sp = e.target.dataset.space;
+    const p1 = document.getElementById('newPin1').value;
+    const p2 = document.getElementById('newPin2').value;
+    const errBox = document.getElementById('setPinError');
+    const fail = (msg) => { errBox.textContent = msg; e.target.dataset.firing = ''; };
+    if (!/^[0-9]{4,8}$/.test(p1)) { fail('4〜8桁の数字で入力してください'); return; }
+    if (p1 !== p2) { fail('確認用のPINが一致しません'); return; }
+    Lock.setPin(data, sp, p1).then(() => {
+      persist();
+      closeSheet();
+      renderApp();
+    });
+    return;
+  }
 
   const keyBtn = e.target.closest('[data-key]');
   if (keyBtn) {
@@ -1172,4 +1277,39 @@ el.sheet.addEventListener('input', (e) => {
   }
 });
 
-renderApp();
+el.lockOverlay.addEventListener('click', async (e) => {
+  if (e.target.id === 'lockCancelBtn') { closeLockScreen(); return; }
+
+  if (e.target.id === 'lockWebauthnBtn') {
+    if (guardOnce(e.target)) return;
+    const ok = await Lock.tryWebauthnUnlock(data, pendingSpaceKey);
+    if (ok) completeUnlock(pendingSpaceKey);
+    else showLockError('認証できませんでした。PINコードをお試しください。');
+    e.target.dataset.firing = '';
+    return;
+  }
+
+  if (e.target.id === 'lockPinSubmit') {
+    if (guardOnce(e.target)) return;
+    const input = document.getElementById('lockPinInput');
+    const ok = await Lock.verifyPin(data, pendingSpaceKey, input.value);
+    e.target.dataset.firing = '';
+    if (ok) { completeUnlock(pendingSpaceKey); return; }
+    showLockError('PINコードが違います');
+    input.value = '';
+  }
+});
+
+el.lockOverlay.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && e.target.id === 'lockPinInput') {
+    document.getElementById('lockPinSubmit').click();
+  }
+});
+
+// 起動直後、初期表示の空間(🧑自分)がロック対象ならロック画面を先に出す
+if (Lock.isSpaceLocked(data, spaceKey, sessionUnlocked)) {
+  pendingSpaceKey = spaceKey;
+  openLockScreen(spaceKey);
+} else {
+  renderApp();
+}

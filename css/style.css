@@ -301,6 +301,42 @@ main { padding: 12px; max-width: 480px; margin: 0 auto; }
 .sheet h2 { margin: 0 0 12px; font-size: 17px; }
 .sheet h3 { font-size: 14px; color: var(--muted); margin: 18px 0 8px; }
 
+/* 画面ロック:背景タップでは閉じない。sheet-overlayより前面に出す */
+.lock-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 60;
+  padding: 20px;
+}
+.lock-overlay.open { display: flex; }
+.lock-box {
+  width: 100%;
+  max-width: 340px;
+  background: var(--card);
+  border-radius: 16px;
+  padding: 24px 20px;
+  text-align: center;
+}
+.lock-box .lock-icon { font-size: 40px; margin-bottom: 8px; }
+.lock-box h2 { font-size: 16px; margin: 0 0 16px; }
+.lock-box .field { text-align: left; }
+.lock-box input[type="password"] {
+  width: 100%;
+  font-size: 20px;
+  letter-spacing: 4px;
+  text-align: center;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--card-alt);
+  color: var(--text);
+}
+.lock-box .btn { width: 100%; }
+
 .field { margin-bottom: 12px; }
 .field label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
 .field input, .field select {

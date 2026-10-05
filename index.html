@@ -40,6 +40,11 @@
   <div class="sheet" id="sheet"></div>
 </div>
 
+<!-- 画面ロック(PIN/Face ID)。背景タップでは閉じない専用オーバーレイ -->
+<div class="lock-overlay" id="lockOverlay">
+  <div id="lockContent"></div>
+</div>
+
 <!-- レポートタブ(Excel/PDF書き出し)用。読み込めない場合はレポートタブ内でその旨を表示する -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
@@ -48,6 +53,7 @@
 <script src="js/store.js"></script>
 <script src="js/ui.js"></script>
 <script src="js/report.js"></script>
+<script src="js/lock.js"></script>
 <script src="js/main.js"></script>
 </body>
 </html>
