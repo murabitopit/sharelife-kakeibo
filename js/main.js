@@ -45,7 +45,13 @@ const el = {
 function space() { return data.spaces[spaceKey]; }
 function key() { return space().currentMonth; }
 
-function persist() { Store.save(data); }
+function persist() { Store.save(data); Sync.push(data); }
+
+// 同期先(Firebase)で相手の端末が同棲空間を更新した時に呼ばれる
+function onRemoteSharedUpdate() {
+  Store.save(data);
+  renderApp();
+}
 
 // 'personal'(🧑自分)・'partner'(👩彼女)それぞれの同棲資金負担分を返す。同棲タブではnull。
 function sharedFundSummary() {
@@ -54,8 +60,21 @@ function sharedFundSummary() {
   return { budget: share, spent: share };
 }
 
+// レポートが「自分」として扱う空間key。この端末の持ち主(Lock.getDeviceOwner)が優先、
+// 未設定なら現在開いているタブで判断する。相方の個人空間は常に除外する(ロックの意味を保つため)。
+function reportOwnKey() {
+  const owner = Lock.getDeviceOwner();
+  if (owner === 'personal' || owner === 'partner') return owner;
+  return spaceKey === 'partner' ? 'partner' : 'personal';
+}
+
 function renderApp() {
   el.tabs.querySelectorAll('.tab').forEach(b => b.classList.toggle('active', b.dataset.space === spaceKey));
+  el.tabs.querySelectorAll('.tab').forEach(b => {
+    if (b.dataset.space === 'personal' || b.dataset.space === 'partner') {
+      b.textContent = Store.spaceLabel(data, b.dataset.space);
+    }
+  });
   el.bottomTabs.querySelectorAll('.bottom-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === activeTab));
   el.monthLabel.textContent = `${key()} ${spaceKey === 'shared' ? '(共有)' : '(自分のみ閲覧可)'}`;
   el.addBtn.hidden = (activeTab === 'assets' || activeTab === 'settings' || activeTab === 'report');
@@ -70,7 +89,7 @@ function renderApp() {
   } else if (activeTab === 'assets') {
     el.tabContent.innerHTML = UI.assetsHtml(space(), key(), data, assetExpanded, pieSelected);
   } else if (activeTab === 'report') {
-    el.tabContent.innerHTML = Report.reportTabHtml(data);
+    el.tabContent.innerHTML = Report.reportTabHtml(data, reportOwnKey());
   } else {
     el.tabContent.innerHTML = settingsTabHtml();
   }
@@ -207,7 +226,7 @@ function detailHtml(catId) {
   const txs = month.transactions.filter(t => t.catId === catId).slice().reverse();
   const today = new Date().toISOString().slice(0, 10);
   let txHtml = txs.map(t => {
-    const payerTag = t.payer ? (t.payer === 'self' ? '🧑自分' : '👩パートナー') : '';
+    const payerTag = t.payer ? (t.payer === 'self' ? '🧑' + Store.spaceName(data, 'personal') : '👩' + Store.spaceName(data, 'partner')) : '';
     return `
       <div class="tx-item">
         <span>${t.date} ${t.memo ? '・' + t.memo : ''} ${payerTag ? '・' + payerTag : ''}</span>
@@ -280,7 +299,7 @@ function editTotalSheetHtml() {
 }
 
 function setPinSheetHtml(spaceKey_) {
-  const label = spaceKey_ === 'partner' ? '👩彼女' : '🧑自分';
+  const label = Store.spaceLabel(data, spaceKey_);
   return `
     <h2>${label}のPINコードを設定</h2>
     <div class="field"><label>新しいPIN(4〜8桁の数字)</label><input type="password" inputmode="numeric" pattern="[0-9]*" id="newPin1" maxlength="8" /></div>
@@ -444,6 +463,33 @@ function resolveBackfillSheetHtml(bfId) {
   `;
 }
 
+// 同棲タブの設定に表示する、端末間同期(Firebase)の状態・操作UI
+function syncSettingsHtml() {
+  if (!Sync.available()) {
+    return `
+      <h3>端末間の同期(2人で共有)</h3>
+      <p class="hint">js/firebase-config.jsが未設定のため、同期機能はまだ使えません。設定方法は同ファイルのコメントを参照してください。設定するまでは今まで通り、この端末だけでの利用になります。</p>
+    `;
+  }
+  const code = data.settings.sync.code;
+  if (code) {
+    return `
+      <h3>端末間の同期(2人で共有)</h3>
+      <p class="hint">同期中です。相手の端末での同棲タブの変更がこの端末にも反映されます。</p>
+      <div class="field"><label>ペアリングコード(他人に教えないこと)</label><div class="readout" style="padding:10px 0;text-align:left;font-weight:700">${code}</div></div>
+      <button class="btn danger" id="syncLeave">この端末の同期をやめる</button>
+    `;
+  }
+  return `
+    <h3>端末間の同期(2人で共有)</h3>
+    <p class="hint">同棲タブの内容を、2人それぞれの携帯でリアルタイムに確認・追加できるようにします。どちらか一方がグループを作り、発行されたコードをもう一方が入力してください。</p>
+    <button class="btn secondary" id="syncCreate">新しい同棲グループを作る</button>
+    <div class="field" style="margin-top:10px"><label>招待されたコードを入力して参加</label><input type="text" id="syncJoinCode" placeholder="xxxx-xxxx" /></div>
+    <button class="btn secondary" id="syncJoin">参加する</button>
+    <div class="hint" id="syncError" style="color:var(--over); min-height:16px"></div>
+  `;
+}
+
 function budgetSettingsHtml() {
   const isSharedSpace = spaceKey === 'shared';
   let html = '<h2>予算設定</h2>';
@@ -453,7 +499,7 @@ function budgetSettingsHtml() {
     const sp = space();
     const myRatio = spaceKey === 'partner' ? (1 - data.settings.ratioSelf) : data.settings.ratioSelf;
     html += `
-      <h3>1人用の予算設定(${spaceKey === 'partner' ? '👩彼女' : '🧑自分'})</h3>
+      <h3>1人用の予算設定(${Store.spaceLabel(data, spaceKey)})</h3>
       <div class="field"><label>今月の収入</label><input type="number" id="incomeEdit" value="${sp.months[key()].income}" /></div>
       <div class="allocation-box" id="allocationBox">${allocationBoxHtml(sp)}</div>
       <div class="settings-list">${categoryRowsHtml(sp)}</div>
@@ -466,9 +512,10 @@ function budgetSettingsHtml() {
     `;
   } else {
     html += `
+      ${syncSettingsHtml()}
       <h3>同棲資金の予算設定(2人分の合計金額)</h3>
-      <p class="hint">ここで設定した金額・割合は🧑自分・👩彼女の両タブから同じ値として扱われます。予算は2人分の合計金額を入力してください。</p>
-      <div class="field"><label>🧑自分の負担割合(%)</label><input type="number" id="ratioSelf" value="${Math.round(data.settings.ratioSelf * 100)}" min="0" max="100" /></div>
+      <p class="hint">ここで設定した金額・割合は${Store.spaceLabel(data, 'personal')}・${Store.spaceLabel(data, 'partner')}の両タブから同じ値として扱われます。予算は2人分の合計金額を入力してください。</p>
+      <div class="field"><label>${Store.spaceLabel(data, 'personal')}の負担割合(%)</label><input type="number" id="ratioSelf" value="${Math.round(data.settings.ratioSelf * 100)}" min="0" max="100" /></div>
       <button class="btn secondary" id="ratioSave">割合を保存</button>
       <div class="settings-list" style="margin-top:12px">${sharedFundRowsHtml(false)}</div>
     `;
@@ -495,8 +542,8 @@ function addCategorySheetHtml(target) {
     <h2>カテゴリを追加</h2>
     <div class="field"><label>どちらに追加しますか</label>
       <select id="newCatTarget">
-        <option value="personal" ${target === 'personal' ? 'selected' : ''}>自身用(🧑自分)</option>
-        <option value="partner" ${target === 'partner' ? 'selected' : ''}>自身用(👩彼女)</option>
+        <option value="personal" ${target === 'personal' ? 'selected' : ''}>自身用(${Store.spaceLabel(data, 'personal')})</option>
+        <option value="partner" ${target === 'partner' ? 'selected' : ''}>自身用(${Store.spaceLabel(data, 'partner')})</option>
         <option value="shared" ${target === 'shared' ? 'selected' : ''}>同棲資金</option>
       </select>
     </div>
@@ -531,8 +578,8 @@ function deleteCategorySheetHtml() {
   };
   return `
     <h2>カテゴリを削除</h2>
-    ${renderGroup(data.spaces.personal, '自身用(🧑自分)', 'personal')}
-    ${renderGroup(data.spaces.partner, '自身用(👩彼女)', 'partner')}
+    ${renderGroup(data.spaces.personal, `自身用(${Store.spaceLabel(data, 'personal')})`, 'personal')}
+    ${renderGroup(data.spaces.partner, `自身用(${Store.spaceLabel(data, 'partner')})`, 'partner')}
     ${renderGroup(data.spaces.shared, '同棲資金', 'shared')}
     <button class="btn secondary" id="txCancel" style="margin-top:16px">閉じる</button>
   `;
@@ -573,8 +620,8 @@ function reorderCategorySheetHtml() {
   return `
     <h2>並び順を変更</h2>
     <p class="hint">☰ を掴んで自由な位置にドラッグすると、同じグループ内で並び替えられます。</p>
-    ${renderGroup(data.spaces.personal, '自身用(🧑自分)', 'personal')}
-    ${renderGroup(data.spaces.partner, '自身用(👩彼女)', 'partner')}
+    ${renderGroup(data.spaces.personal, `自身用(${Store.spaceLabel(data, 'personal')})`, 'personal')}
+    ${renderGroup(data.spaces.partner, `自身用(${Store.spaceLabel(data, 'partner')})`, 'partner')}
     ${renderGroup(data.spaces.shared, '同棲資金', 'shared')}
     <button class="btn secondary" id="txCancel" style="margin-top:16px">閉じる</button>
   `;
@@ -641,6 +688,24 @@ function onDragPointerUp() {
   openSheet(reorderCategorySheetHtml());
 }
 
+// 開発用タブ:個人タブの表示名の変更(絵文字は固定)
+function spaceLabelRowsHtml() {
+  return `
+    <h3>名前の変更</h3>
+    <p class="hint">タブの見出しなど、アプリ内の表示名を変更できます(絵文字は変更できません)。</p>
+    <div class="settings-list">
+      <div class="item">
+        <span class="name-cell">🧑</span>
+        <input type="text" class="spaceLabelEdit" data-space="personal" value="${data.settings.labels.personal}" maxlength="10" style="width:140px" />
+      </div>
+      <div class="item">
+        <span class="name-cell">👩</span>
+        <input type="text" class="spaceLabelEdit" data-space="partner" value="${data.settings.labels.partner}" maxlength="10" style="width:140px" />
+      </div>
+    </div>
+  `;
+}
+
 // 開発用タブ:デフォルトの収入(🧑自分・👩彼女)の編集
 function defaultIncomeRowsHtml() {
   const inc = data.settings.defaultTemplate.income;
@@ -648,11 +713,11 @@ function defaultIncomeRowsHtml() {
     <h3>デフォルトの収入</h3>
     <div class="settings-list">
       <div class="item">
-        <span class="name-cell">🧑自分</span>
+        <span class="name-cell">${Store.spaceLabel(data, 'personal')}</span>
         <input type="number" class="defTmplIncome" data-who="personal" value="${inc.personal}" style="width:120px" />
       </div>
       <div class="item">
-        <span class="name-cell">👩彼女</span>
+        <span class="name-cell">${Store.spaceLabel(data, 'partner')}</span>
         <input type="number" class="defTmplIncome" data-who="partner" value="${inc.partner}" style="width:120px" />
       </div>
     </div>
@@ -682,15 +747,17 @@ function defaultTemplateRowsHtml(groupKey, label) {
 function devSettingsHtml() {
   return `
     <h2>開発用</h2>
-    <button class="btn secondary" id="forceClose">当月を締めて翌月へ進める(🧑自分・👩彼女・🤝同棲すべて・テスト用)</button>
+    <button class="btn secondary" id="forceClose">当月を締めて翌月へ進める(${Store.spaceLabel(data, 'personal')}・${Store.spaceLabel(data, 'partner')}・🤝同棲すべて・テスト用)</button>
     <button class="btn secondary" id="resetToDefaults" style="margin-top:8px">予算設定をデフォルトに戻して金額もリセット(テスト用)</button>
     <button class="btn danger" id="resetAll" style="margin-top:12px">金額をすべてリセットする(テスト用)</button>
+
+    ${spaceLabelRowsHtml()}
 
     <h3 style="margin-top:20px">デフォルト予算額の編集</h3>
     <p class="hint">「予算設定をデフォルトに戻して金額もリセット」ボタンで適用される金額です。ここで自由に変更できます。</p>
     ${defaultIncomeRowsHtml()}
-    ${defaultTemplateRowsHtml('personal', '個人用(🧑自分)')}
-    ${defaultTemplateRowsHtml('partner', '個人用(👩彼女)')}
+    ${defaultTemplateRowsHtml('personal', `個人用(${Store.spaceLabel(data, 'personal')})`)}
+    ${defaultTemplateRowsHtml('partner', `個人用(${Store.spaceLabel(data, 'partner')})`)}
     ${defaultTemplateRowsHtml('shared', '同棲資金(2人分の合計金額)')}
   `;
 }
@@ -738,13 +805,13 @@ el.tabContent.addEventListener('click', (e) => {
 
   if (e.target.id === 'reportExportExcel') {
     if (guardOnce(e.target)) return;
-    Report.exportExcel(data);
+    Report.exportExcel(data, reportOwnKey());
     return;
   }
 
   if (e.target.id === 'reportOverallPdf') {
     if (guardOnce(e.target)) return;
-    Report.renderHtmlToPdf(Report.overallReportHtml(data), `資産管理レポート_全期間.pdf`);
+    Report.renderHtmlToPdf(Report.overallReportHtml(data, reportOwnKey()), `資産管理レポート_全期間.pdf`);
     return;
   }
 
@@ -752,7 +819,7 @@ el.tabContent.addEventListener('click', (e) => {
   if (reportPdfBtn) {
     if (guardOnce(reportPdfBtn)) return;
     const mk = reportPdfBtn.dataset.reportpdf;
-    Report.renderHtmlToPdf(Report.monthReportHtml(data, mk), `資産管理レポート_${mk}.pdf`);
+    Report.renderHtmlToPdf(Report.monthReportHtml(data, mk, reportOwnKey()), `資産管理レポート_${mk}.pdf`);
     return;
   }
 
@@ -771,7 +838,7 @@ el.tabContent.addEventListener('click', (e) => {
   if (e.target.id === 'lockSetWebauthn') {
     if (guardOnce(e.target)) return;
     const sp = e.target.dataset.space;
-    const label = sp === 'partner' ? '👩彼女' : '🧑自分';
+    const label = Store.spaceLabel(data, sp);
     Lock.registerWebauthn(data, sp, label).then(() => {
       persist();
       renderApp();
@@ -856,6 +923,46 @@ el.tabContent.addEventListener('click', (e) => {
   if (e.target.id === 'ratioSave') {
     if (guardOnce(e.target)) return;
     data.settings.ratioSelf = (Number(document.getElementById('ratioSelf').value) || 0) / 100;
+    persist();
+    renderApp();
+    return;
+  }
+
+  if (e.target.id === 'syncCreate') {
+    if (guardOnce(e.target)) return;
+    Sync.createHousehold(data, onRemoteSharedUpdate).then(() => {
+      Store.save(data);
+      renderApp();
+    }).catch((err) => {
+      alert('同期グループの作成に失敗しました: ' + err.message);
+      e.target.dataset.firing = '';
+    });
+    return;
+  }
+
+  if (e.target.id === 'syncJoin') {
+    if (guardOnce(e.target)) return;
+    const codeInput = document.getElementById('syncJoinCode');
+    const errBox = document.getElementById('syncError');
+    const code = codeInput.value.trim();
+    if (!code) { errBox.textContent = 'コードを入力してください'; e.target.dataset.firing = ''; return; }
+    Sync.joinHousehold(data, code, onRemoteSharedUpdate).then(() => {
+      Store.save(data);
+      renderApp();
+    }).catch((err) => {
+      errBox.textContent = err.message;
+      e.target.dataset.firing = '';
+    });
+    return;
+  }
+
+  if (e.target.id === 'syncLeave') {
+    if (guardOnce(e.target)) return;
+    if (!confirm('この端末の同期をやめます。よろしいですか?(今の同棲データはこの端末に残ります)')) {
+      e.target.dataset.firing = '';
+      return;
+    }
+    Sync.leaveHousehold(data);
     persist();
     renderApp();
     return;
@@ -975,6 +1082,14 @@ el.tabContent.addEventListener('change', (e) => {
   if (e.target.classList.contains('defTmplIncome')) {
     data.settings.defaultTemplate.income[e.target.dataset.who] = Number(e.target.value) || 0;
     persist();
+    return;
+  }
+  if (e.target.classList.contains('spaceLabelEdit')) {
+    const sp = e.target.dataset.space;
+    const fallback = sp === 'partner' ? '彼女' : '自分';
+    data.settings.labels[sp] = e.target.value.trim() || fallback;
+    persist();
+    renderApp();
     return;
   }
 });
@@ -1305,6 +1420,9 @@ el.lockOverlay.addEventListener('keydown', (e) => {
     document.getElementById('lockPinSubmit').click();
   }
 });
+
+// 同期先(Firebase)に既に参加済みなら、起動時に購読を再開する(未設定なら何もしない)
+Sync.resume(data, onRemoteSharedUpdate);
 
 // 起動直後、初期表示の空間(🧑自分)がロック対象ならロック画面を先に出す
 if (Lock.isSpaceLocked(data, spaceKey, sessionUnlocked)) {

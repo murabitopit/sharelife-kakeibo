@@ -1,12 +1,10 @@
 // レポートタブ用:全期間/月次のExcel(.xlsx)書き出し・PDF表示。
 // ExcelJS / jsPDF / html2canvas はCDN読み込み(index.html)。通信環境が無いと使えないため、
 // 読み込み失敗時は各操作の実行時にその場で知らせる(アプリ本体の閲覧・記録には影響しない)。
-
-const SPACE_DEFS = [
-  { key: 'personal', label: '🧑自分' },
-  { key: 'partner', label: '👩彼女' },
-  { key: 'shared', label: '🤝同棲' },
-];
+//
+// プライバシー上の理由(画面ロックの意味が無くならないよう)、レポートは常に
+// 「自分(ログイン中の本人)」と「同棲」の2空間のみを対象にし、相方の個人空間は一切含めない。
+// どちらが「自分」かは main.js 側で Lock.getDeviceOwner()/現在のタブから決めて ownKey として渡す。
 
 // style.cssの--series-1〜12(ライトモード)と合わせた固定パレット(canvas描画用に複製)
 const REPORT_PALETTE = [
@@ -16,58 +14,71 @@ const REPORT_PALETTE = [
 
 function yen(n) { return '¥' + Math.round(n || 0).toLocaleString('ja-JP'); }
 
-function spacesOf(data) {
-  return SPACE_DEFS.map(s => ({ ...s, sp: data.spaces[s.key] }));
+// --- データ収集 ---
+// ownKey: 'personal' | 'partner'。レポート対象は常に「ownKeyの空間」+「同棲」の2つだけ
+
+// 個人側(自分)の月次データ:収入はそのまま、支出には同棲資金の自己負担分を上乗せする
+// (同棲側の「収入」は2人の負担額の合算であって新規の収入ではないため、個人側の支出として扱う)
+function gatherOwnMonthRow(data, ownKey, mk) {
+  const sp = data.spaces[ownKey];
+  if (!sp.months[mk]) return { monthKey: mk, exists: false, income: 0, spent: 0 };
+  const t = Store.totals(sp, mk);
+  const contribution = Store.sharedContributionForMonth(data, ownKey, mk);
+  return { monthKey: mk, exists: true, income: t.income, spent: t.spent + contribution, contribution };
 }
 
-// --- データ収集 ---
+function gatherSharedMonthRow(data, mk) {
+  const sp = data.spaces.shared;
+  if (!sp.months[mk]) return { monthKey: mk, exists: false, income: 0, spent: 0 };
+  const t = Store.totals(sp, mk);
+  return { monthKey: mk, exists: true, income: t.income, spent: t.spent };
+}
 
-// 全期間レポート用データ:月ごと×空間ごとの収入/支出、全期間のカテゴリ別支出合算
-function gatherOverallData(data) {
-  const monthsDesc = Store.allMonthKeys(data); // 新しい順
-  const monthsAsc = monthsDesc.slice().reverse();
-  const spaces = spacesOf(data);
-
-  const monthRows = monthsAsc.map(mk => {
-    const perSpace = spaces.map(s => {
-      if (!s.sp.months[mk]) return { key: s.key, label: s.label, exists: false, income: 0, spent: 0 };
-      const t = Store.totals(s.sp, mk);
-      return { key: s.key, label: s.label, exists: true, income: t.income, spent: t.spent };
-    });
-    const incomeSum = perSpace.reduce((a, x) => a + x.income, 0);
-    const spentSum = perSpace.reduce((a, x) => a + x.spent, 0);
-    return { monthKey: mk, perSpace, incomeSum, spentSum };
-  });
-
+// 空間1つ分の全期間データ(月次推移・カテゴリ内訳合算・合計)。contribLabelがあれば
+// 同棲費負担を1項目としてカテゴリ内訳・支出合計へ合算する(自分側のみ使う)
+function gatherSpaceOverall(data, spaceKey, monthsAsc, contribLabel) {
+  const isOwn = !!contribLabel;
+  const monthRows = monthsAsc.map(mk => isOwn ? gatherOwnMonthRow(data, spaceKey, mk) : gatherSharedMonthRow(data, mk));
   const catTotals = new Map();
-  for (const s of spaces) {
-    for (const mk of monthsAsc) {
-      for (const c of Store.categorySpendBreakdown(s.sp, mk)) {
-        catTotals.set(c.name, (catTotals.get(c.name) || 0) + c.value);
-      }
+  for (const mk of monthsAsc) {
+    for (const c of Store.categorySpendBreakdown(data.spaces[spaceKey], mk)) {
+      catTotals.set(c.name, (catTotals.get(c.name) || 0) + c.value);
     }
   }
-  const categoryBreakdown = Array.from(catTotals, ([name, value]) => ({ name, value }))
-    .sort((a, b) => b.value - a.value);
-
-  const grandIncome = monthRows.reduce((a, x) => a + x.incomeSum, 0);
-  const grandSpent = monthRows.reduce((a, x) => a + x.spentSum, 0);
-
-  return { monthsAsc, monthsDesc, monthRows, categoryBreakdown, grandIncome, grandSpent };
+  if (isOwn) {
+    const contribSum = monthRows.reduce((s, r) => s + (r.contribution || 0), 0);
+    if (contribSum > 0) catTotals.set(contribLabel, (catTotals.get(contribLabel) || 0) + contribSum);
+  }
+  const categoryBreakdown = Array.from(catTotals, ([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
+  const grandIncome = monthRows.reduce((a, x) => a + x.income, 0);
+  const grandSpent = monthRows.reduce((a, x) => a + x.spent, 0);
+  return { monthRows, categoryBreakdown, grandIncome, grandSpent };
 }
 
-// 指定月のレポート用データ:空間ごとの収支・カテゴリ内訳・精算内訳
-function gatherMonthData(data, monthKey_) {
-  const spaces = spacesOf(data);
-  const perSpace = spaces.map(s => {
-    const sp = s.sp;
-    if (!sp.months[monthKey_]) return { key: s.key, label: s.label, exists: false };
-    const totals = Store.totals(sp, monthKey_);
-    const breakdown = Store.categorySpendBreakdown(sp, monthKey_);
-    const settlement = Store.settlementOf(sp, monthKey_);
-    return { key: s.key, label: s.label, exists: true, totals, breakdown, settlement };
-  });
-  return { monthKey: monthKey_, perSpace };
+// 全期間レポート用データ:自分の空間 + 同棲の2本立て
+function gatherOverallData(data, ownKey) {
+  const monthsDesc = Store.allMonthKeys(data); // 新しい順
+  const monthsAsc = monthsDesc.slice().reverse();
+  const ownLabel = Store.spaceLabel(data, ownKey);
+  const own = gatherSpaceOverall(data, ownKey, monthsAsc, `🤝同棲費負担`);
+  const shared = gatherSpaceOverall(data, 'shared', monthsAsc, null);
+  return { monthsAsc, monthsDesc, ownKey, ownLabel, own, shared };
+}
+
+// 指定月のレポート用データ:自分の空間 + 同棲の2本立て
+function gatherMonthData(data, monthKey_, ownKey) {
+  const ownRow = gatherOwnMonthRow(data, ownKey, monthKey_);
+  const sharedRow = gatherSharedMonthRow(data, monthKey_);
+  const ownBreakdown = Store.categorySpendBreakdown(data.spaces[ownKey], monthKey_);
+  if (ownRow.contribution > 0) ownBreakdown.push({ name: '🤝同棲費負担', value: ownRow.contribution });
+  const sharedBreakdown = Store.categorySpendBreakdown(data.spaces.shared, monthKey_);
+  return {
+    monthKey: monthKey_,
+    ownKey,
+    ownLabel: Store.spaceLabel(data, ownKey),
+    own: { exists: ownRow.exists, totals: { income: ownRow.income, spent: ownRow.spent, remaining: ownRow.income - ownRow.spent }, breakdown: ownBreakdown },
+    shared: { exists: sharedRow.exists, totals: { income: sharedRow.income, spent: sharedRow.spent, remaining: sharedRow.income - sharedRow.spent }, breakdown: sharedBreakdown },
+  };
 }
 
 // --- canvasでの簡易チャート描画(xlsx埋め込み・PDF両方で使う。画像化してdataURLで返す) ---
@@ -183,12 +194,13 @@ function downloadBlob(blob, filename) {
 
 // --- Excel(.xlsx)書き出し ---
 
-async function exportExcel(data) {
+async function exportExcel(data, ownKey) {
   if (!window.ExcelJS) {
     alert('Excel書き出し用ライブラリの読み込みに失敗しました。通信環境を確認してもう一度お試しください。');
     return;
   }
-  const overall = gatherOverallData(data);
+  const overall = gatherOverallData(data, ownKey);
+  const ownLabel = overall.ownLabel;
   const wb = new ExcelJS.Workbook();
   wb.creator = '資産管理アプリ';
   wb.created = new Date();
@@ -197,45 +209,49 @@ async function exportExcel(data) {
   const sheet1 = wb.addWorksheet('総合');
   sheet1.columns = [
     { header: '月', key: 'month', width: 12 },
-    { header: '収入(自分)', key: 'inc_personal', width: 13 },
-    { header: '支出(自分)', key: 'exp_personal', width: 13 },
-    { header: '収入(彼女)', key: 'inc_partner', width: 13 },
-    { header: '支出(彼女)', key: 'exp_partner', width: 13 },
+    { header: `収入(${ownLabel})`, key: 'inc_own', width: 14 },
+    { header: `支出(${ownLabel}・同棲費負担込み)`, key: 'exp_own', width: 20 },
     { header: '収入(同棲)', key: 'inc_shared', width: 13 },
     { header: '支出(同棲)', key: 'exp_shared', width: 13 },
-    { header: '収入合計', key: 'inc_total', width: 13 },
-    { header: '支出合計', key: 'exp_total', width: 13 },
   ];
   sheet1.getRow(1).font = { bold: true };
-  for (const row of overall.monthRows) {
-    const byKey = {};
-    for (const p of row.perSpace) byKey[p.key] = p;
+  for (let i = 0; i < overall.monthsAsc.length; i++) {
     sheet1.addRow({
-      month: row.monthKey,
-      inc_personal: byKey.personal.income, exp_personal: byKey.personal.spent,
-      inc_partner: byKey.partner.income, exp_partner: byKey.partner.spent,
-      inc_shared: byKey.shared.income, exp_shared: byKey.shared.spent,
-      inc_total: row.incomeSum, exp_total: row.spentSum,
+      month: overall.monthsAsc[i],
+      inc_own: overall.own.monthRows[i].income, exp_own: overall.own.monthRows[i].spent,
+      inc_shared: overall.shared.monthRows[i].income, exp_shared: overall.shared.monthRows[i].spent,
     });
   }
-  const totalRow = sheet1.addRow({ month: '合計', inc_total: overall.grandIncome, exp_total: overall.grandSpent });
+  const totalRow = sheet1.addRow({ month: '合計', inc_own: overall.own.grandIncome, exp_own: overall.own.grandSpent, inc_shared: overall.shared.grandIncome, exp_shared: overall.shared.grandSpent });
   totalRow.font = { bold: true };
 
   if (overall.monthsAsc.length > 0) {
-    const barPng = drawIncomeExpenseBarChart(overall.monthsAsc, overall.monthRows.map(r => r.incomeSum), overall.monthRows.map(r => r.spentSum));
-    const barImgId = wb.addImage({ base64: stripDataUrlPrefix(barPng), extension: 'png' });
-    const chartRow = overall.monthRows.length + 3;
-    sheet1.addImage(barImgId, { tl: { col: 0, row: chartRow }, ext: { width: 450, height: 220 } });
+    const ownBarPng = drawIncomeExpenseBarChart(overall.monthsAsc, overall.own.monthRows.map(r => r.income), overall.own.monthRows.map(r => r.spent));
+    const ownBarImgId = wb.addImage({ base64: stripDataUrlPrefix(ownBarPng), extension: 'png' });
+    const chartRow = overall.monthsAsc.length + 3;
+    sheet1.addRow({});
+    sheet1.getCell(`A${chartRow - 1}`).value = `${ownLabel}の収支推移`;
+    sheet1.addImage(ownBarImgId, { tl: { col: 0, row: chartRow }, ext: { width: 450, height: 220 } });
 
-    const pieSlices = overall.categoryBreakdown.map(c => ({ name: c.name, value: c.value }));
-    const piePng = drawPieChartPng(pieSlices);
-    const pieImgId = wb.addImage({ base64: stripDataUrlPrefix(piePng), extension: 'png' });
-    sheet1.addImage(pieImgId, { tl: { col: 0, row: chartRow + 13 }, ext: { width: 500, height: 240 } });
+    const ownPiePng = drawPieChartPng(overall.own.categoryBreakdown);
+    const ownPieImgId = wb.addImage({ base64: stripDataUrlPrefix(ownPiePng), extension: 'png' });
+    sheet1.getCell(`A${chartRow + 12}`).value = `${ownLabel}のカテゴリ別支出(全期間合算)`;
+    sheet1.addImage(ownPieImgId, { tl: { col: 0, row: chartRow + 13 }, ext: { width: 500, height: 240 } });
+
+    const sharedBarPng = drawIncomeExpenseBarChart(overall.monthsAsc, overall.shared.monthRows.map(r => r.income), overall.shared.monthRows.map(r => r.spent));
+    const sharedBarImgId = wb.addImage({ base64: stripDataUrlPrefix(sharedBarPng), extension: 'png' });
+    sheet1.getCell(`H${chartRow - 1}`).value = `同棲の収支推移`;
+    sheet1.addImage(sharedBarImgId, { tl: { col: 7, row: chartRow }, ext: { width: 450, height: 220 } });
+
+    const sharedPiePng = drawPieChartPng(overall.shared.categoryBreakdown);
+    const sharedPieImgId = wb.addImage({ base64: stripDataUrlPrefix(sharedPiePng), extension: 'png' });
+    sheet1.getCell(`H${chartRow + 12}`).value = `同棲のカテゴリ別支出(全期間合算)`;
+    sheet1.addImage(sharedPieImgId, { tl: { col: 7, row: chartRow + 13 }, ext: { width: 500, height: 240 } });
   }
 
   // --- 2枚目以降:月次(新しい月が2枚目になるよう降順で追加) ---
   for (const mk of overall.monthsDesc) {
-    const monthData = gatherMonthData(data, mk);
+    const monthData = gatherMonthData(data, mk, ownKey);
     const ws = wb.addWorksheet(mk);
     ws.columns = [
       { header: '空間', key: 'space', width: 10 },
@@ -243,23 +259,28 @@ async function exportExcel(data) {
       { header: '金額', key: 'value', width: 13 },
     ];
     ws.getRow(1).font = { bold: true };
-    const combined = new Map();
-    for (const sp of monthData.perSpace) {
-      if (!sp.exists) continue;
-      ws.addRow({ space: sp.label, name: '収入', value: sp.totals.income });
-      ws.addRow({ space: sp.label, name: '支出', value: sp.totals.spent });
-      ws.addRow({ space: sp.label, name: '残り予算(収入-支出)', value: sp.totals.remaining });
-      for (const c of sp.breakdown) {
-        ws.addRow({ space: sp.label, name: c.name, value: c.value });
-        combined.set(c.name, (combined.get(c.name) || 0) + c.value);
+    const sections = [{ label: ownLabel, d: monthData.own }, { label: '🤝同棲', d: monthData.shared }];
+    for (const sec of sections) {
+      if (!sec.d.exists) continue;
+      ws.addRow({ space: sec.label, name: '収入', value: sec.d.totals.income });
+      ws.addRow({ space: sec.label, name: '支出', value: sec.d.totals.spent });
+      ws.addRow({ space: sec.label, name: '残り(収入-支出)', value: sec.d.totals.remaining });
+      for (const c of sec.d.breakdown) {
+        ws.addRow({ space: sec.label, name: c.name, value: c.value });
       }
       ws.addRow({});
     }
-    const slices = Array.from(combined, ([name, value]) => ({ name, value }));
-    if (slices.length) {
-      const png = drawPieChartPng(slices);
+    if (monthData.own.breakdown.length) {
+      const png = drawPieChartPng(monthData.own.breakdown);
       const imgId = wb.addImage({ base64: stripDataUrlPrefix(png), extension: 'png' });
+      ws.getCell('E1').value = `${ownLabel}`;
       ws.addImage(imgId, { tl: { col: 4, row: 1 }, ext: { width: 420, height: 200 } });
+    }
+    if (monthData.shared.breakdown.length) {
+      const png = drawPieChartPng(monthData.shared.breakdown);
+      const imgId = wb.addImage({ base64: stripDataUrlPrefix(png), extension: 'png' });
+      ws.getCell('E12').value = '🤝同棲';
+      ws.addImage(imgId, { tl: { col: 4, row: 12 }, ext: { width: 420, height: 200 } });
     }
   }
 
@@ -335,55 +356,67 @@ function reportTableHtml(rows) {
   `;
 }
 
-function overallReportHtml(data) {
-  const overall = gatherOverallData(data);
-  const barPng = drawIncomeExpenseBarChart(overall.monthsAsc, overall.monthRows.map(r => r.incomeSum), overall.monthRows.map(r => r.spentSum));
-  const piePng = drawPieChartPng(overall.categoryBreakdown);
-  const periodLabel = overall.monthsAsc.length ? `${overall.monthsAsc[0]} 〜 ${overall.monthsDesc[0]}` : '(データなし)';
-  const rows = [['月', '収入合計', '支出合計']].concat(
-    overall.monthRows.map(r => [r.monthKey, yen(r.incomeSum), yen(r.spentSum)])
+// 自分(own)/同棲(shared)1空間分のセクションHTML(全期間レポート用)
+function overallSpaceSectionHtml(label, part, monthsAsc, monthsDesc) {
+  const barPng = drawIncomeExpenseBarChart(monthsAsc, part.monthRows.map(r => r.income), part.monthRows.map(r => r.spent));
+  const piePng = drawPieChartPng(part.categoryBreakdown);
+  const rows = [['月', '収入', '支出']].concat(
+    part.monthRows.map(r => [r.monthKey, yen(r.income), yen(r.spent)])
   );
-  rows.push(['合計', yen(overall.grandIncome), yen(overall.grandSpent)]);
+  rows.push(['合計', yen(part.grandIncome), yen(part.grandSpent)]);
   return `
-    <h1 style="font-size:20px;">資産管理レポート(全期間)</h1>
-    <p style="color:#666; font-size:12px;">対象期間: ${periodLabel} / 🧑自分+👩彼女+🤝同棲 合算</p>
-    <h2 style="font-size:15px; margin-top:20px;">収入・支出の推移</h2>
+    <h2 style="font-size:17px; margin-top:28px; border-bottom:2px solid #333; padding-bottom:4px;">${label}の収支</h2>
+    <h3 style="font-size:14px; margin-top:16px;">収入・支出の推移</h3>
     <img src="${barPng}" style="width:100%; max-width:660px;" />
-    <h2 style="font-size:15px; margin-top:20px;">カテゴリ別支出(全期間合算)</h2>
+    <h3 style="font-size:14px; margin-top:16px;">カテゴリ別支出(全期間合算)</h3>
     <img src="${piePng}" style="width:100%; max-width:660px;" />
-    <h2 style="font-size:15px; margin-top:20px;">月別合計</h2>
+    <h3 style="font-size:14px; margin-top:16px;">月別合計</h3>
     ${reportTableHtml(rows)}
   `;
 }
 
-function monthReportHtml(data, monthKey_) {
-  const monthData = gatherMonthData(data, monthKey_);
-  let body = '';
-  for (const sp of monthData.perSpace) {
-    if (!sp.exists) continue;
-    const piePng = sp.breakdown.length ? drawPieChartPng(sp.breakdown) : null;
-    body += `
-      <h2 style="font-size:15px; margin-top:20px;">${sp.label}</h2>
-      ${reportTableHtml([
-        ['項目', '金額'],
-        ['収入', yen(sp.totals.income)],
-        ['支出', yen(sp.totals.spent)],
-        ['残り予算(収入-支出)', yen(sp.totals.remaining)],
-      ])}
-      ${piePng ? `<img src="${piePng}" style="width:100%; max-width:600px;" />` : ''}
-      ${sp.breakdown.length ? reportTableHtml([['カテゴリ', '支出']].concat(sp.breakdown.map(c => [c.name, yen(c.value)]))) : ''}
-    `;
-  }
+function overallReportHtml(data, ownKey) {
+  const overall = gatherOverallData(data, ownKey);
+  const periodLabel = overall.monthsAsc.length ? `${overall.monthsAsc[0]} 〜 ${overall.monthsDesc[0]}` : '(データなし)';
+  return `
+    <h1 style="font-size:20px;">資産管理レポート(全期間)</h1>
+    <p style="color:#666; font-size:12px;">対象期間: ${periodLabel} / ${overall.ownLabel}・🤝同棲(それぞれ別集計。同棲費の自己負担分は${overall.ownLabel}側の支出に含む)</p>
+    ${overallSpaceSectionHtml(overall.ownLabel, overall.own, overall.monthsAsc, overall.monthsDesc)}
+    ${overallSpaceSectionHtml('🤝同棲', overall.shared, overall.monthsAsc, overall.monthsDesc)}
+  `;
+}
+
+function monthSpaceSectionHtml(label, d) {
+  if (!d.exists) return `<h2 style="font-size:17px; margin-top:20px;">${label}</h2><p class="hint">この月の記録はありません</p>`;
+  const piePng = d.breakdown.length ? drawPieChartPng(d.breakdown) : null;
+  return `
+    <h2 style="font-size:17px; margin-top:20px; border-bottom:2px solid #333; padding-bottom:4px;">${label}</h2>
+    ${reportTableHtml([
+      ['項目', '金額'],
+      ['収入', yen(d.totals.income)],
+      ['支出', yen(d.totals.spent)],
+      ['残り(収入-支出)', yen(d.totals.remaining)],
+    ])}
+    ${piePng ? `<img src="${piePng}" style="width:100%; max-width:600px;" />` : ''}
+    ${d.breakdown.length ? reportTableHtml([['カテゴリ', '支出']].concat(d.breakdown.map(c => [c.name, yen(c.value)]))) : ''}
+  `;
+}
+
+function monthReportHtml(data, monthKey_, ownKey) {
+  const monthData = gatherMonthData(data, monthKey_, ownKey);
   return `
     <h1 style="font-size:20px;">月次レポート: ${monthKey_}</h1>
-    ${body}
+    <p style="color:#666; font-size:12px;">${monthData.ownLabel}・🤝同棲(それぞれ別集計。同棲費の自己負担分は${monthData.ownLabel}側の支出に含む)</p>
+    ${monthSpaceSectionHtml(monthData.ownLabel, monthData.own)}
+    ${monthSpaceSectionHtml('🤝同棲', monthData.shared)}
   `;
 }
 
 // --- レポートタブ本体のHTML ---
 
-function reportTabHtml(data) {
+function reportTabHtml(data, ownKey) {
   const months = Store.allMonthKeys(data);
+  const ownLabel = Store.spaceLabel(data, ownKey);
   if (months.length === 0) {
     return `
       <div class="section-title">レポート</div>
@@ -393,7 +426,7 @@ function reportTabHtml(data) {
   return `
     <div class="section-title">全期間レポート</div>
     <div class="card report-card">
-      <div class="hint" style="margin-top:0">🧑自分+👩彼女+🤝同棲 合算・記録がある全${months.length}か月分</div>
+      <div class="hint" style="margin-top:0">${ownLabel}+🤝同棲・記録がある全${months.length}か月分(相方の個人空間は含みません)</div>
       <button class="btn" id="reportOverallPdf">PDFで見る</button>
       <button class="btn secondary" id="reportExportExcel" style="margin-top:8px">Excel(.xlsx)を書き出す</button>
     </div>

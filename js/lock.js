@@ -118,7 +118,7 @@ function isSpaceLocked(data, spaceKey, sessionUnlocked) {
 }
 
 function lockScreenHtml(spaceKey, data) {
-  const label = spaceKey === 'personal' ? '🧑自分' : '👩彼女';
+  const label = Store.spaceLabel(data, spaceKey);
   const webauthnOn = hasWebauthn(data, spaceKey);
   return `
     <div class="lock-box">
@@ -137,7 +137,7 @@ function lockScreenHtml(spaceKey, data) {
 }
 
 function lockSettingsHtml(data, spaceKey) {
-  const label = spaceKey === 'personal' ? '🧑自分' : '👩彼女';
+  const label = Store.spaceLabel(data, spaceKey);
   const owner = getDeviceOwner();
   const pinOn = hasPin(data, spaceKey);
   const webauthnOn = hasWebauthn(data, spaceKey);

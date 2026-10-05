@@ -205,6 +205,12 @@ function migrateCategoryNames(data) {
   if (!data.settings.lock) {
     data.settings.lock = { personal: null, partner: null };
   }
+  if (!data.settings.labels) {
+    data.settings.labels = { personal: '自分', partner: '彼女' };
+  }
+  if (!data.settings.sync) {
+    data.settings.sync = { code: null }; // 同棲スペースのクラウド同期(Firebase)に参加中のペアリングコード
+  }
   if (!data.settings.defaultTemplate) {
     data.settings.defaultTemplate = defaultBudgetTemplate();
   }
@@ -296,6 +302,8 @@ function defaultData() {
       ratioSelf: 0.6, // 同棲資金のうち自分(🧑)が負担する割合。彼女(👩)の割合は1-ratioSelf
       defaultTemplate: defaultBudgetTemplate(), // 開発用タブで編集・再適用できるデフォルト予算額
       lock: { personal: null, partner: null }, // 個人タブの画面ロック設定(PIN/Face ID)。同棲タブは対象外
+      labels: { personal: '自分', partner: '彼女' }, // 個人タブの表示名(開発用タブで変更可能。絵文字は固定)
+      sync: { code: null }, // 同棲スペースのクラウド同期(Firebase)に参加中のペアリングコード
     },
     spaces: {
       personal: newSpace('personal'), // 🧑自分
@@ -494,6 +502,32 @@ function syncSharedIncome(data) {
   const sp = data.spaces.shared;
   const m = sp.months[sp.currentMonth];
   if (m) m.income = sharedFundTotal(data);
+}
+
+// 個人タブ(personal/partner)の表示名。絵文字は固定、名前部分だけ設定で変更可能
+const SPACE_EMOJI = { personal: '🧑', partner: '👩', shared: '🤝' };
+function spaceName(data, spaceKey) {
+  if (spaceKey === 'shared') return '同棲';
+  const labels = data.settings.labels || {};
+  return labels[spaceKey] || (spaceKey === 'partner' ? '彼女' : '自分');
+}
+function spaceLabel(data, spaceKey) {
+  return (SPACE_EMOJI[spaceKey] || '') + spaceName(data, spaceKey);
+}
+
+// 指定space(personal/partner)の指定月における同棲資金の自己負担額。
+// 月が締まっていれば決算時点の実額(settlement.extraObligation)、今月分ならその場の割合計算値。
+// 過去月でも未締めの場合やデータ自体が無い場合は0(過去に遡って正確な値を復元できないため)
+function sharedContributionForMonth(data, spaceKey, monthKey_) {
+  if (spaceKey !== 'personal' && spaceKey !== 'partner') return 0;
+  const sp = data.spaces[spaceKey];
+  const month = sp.months[monthKey_];
+  if (!month) return 0;
+  if (month.closed) return (month.settlement && month.settlement.extraObligation) || 0;
+  if (monthKey_ === sp.currentMonth) {
+    return spaceKey === 'partner' ? partnerSharedShare(data) : personalSharedShare(data);
+  }
+  return 0;
 }
 
 // 指定日の支出合計・収入合計(収支カレンダー用)
@@ -787,6 +821,7 @@ function closeMonth(space, key, extraObligation) {
 
   settlement.leftover = leftover;
   settlement.leftoverTargetId = targetId;
+  settlement.extraObligation = extraObligation || 0;
   month.settlement = settlement;
   month.closed = true;
   if (!space.months[nextKey]) {
@@ -856,6 +891,7 @@ window.Store = {
   reassignBackfill, acceptBackfillFromReserve,
   totalLeafBudget, findLeafByName, leftoverTargetId,
   sharedFundTotal, personalSharedShare, partnerSharedShare, syncSharedIncome,
+  spaceName, spaceLabel, sharedContributionForMonth,
   dayTotals, transactionsOnDay, transactionsInMonth, settlementOf,
   defaultBudgetTemplate, applyDefaultTemplate, resetSpaceAmounts,
   allMonthKeys, categorySpendBreakdown,

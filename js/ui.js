@@ -492,7 +492,7 @@ function historyListHtml(space, monthKey_, categoryLookup) {
   return txs.map(t => {
     const cat = t.type === 'income' ? null : categoryLookup(t.catId);
     const label = t.type === 'income' ? '💰 収入' : (cat ? `${iconFor(cat)} ${cat.name}` : '(削除された項目)');
-    const payerTag = t.payer ? (t.payer === 'self' ? '🧑自分' : '👩パートナー') : '';
+    const payerTag = t.payer ? (t.payer === 'self' ? '🧑' : '👩') : '';
     return `
       <div class="tx-item" data-tx="${t.id}">
         <span>${t.date} ${label}${t.memo ? '・' + t.memo : ''}${payerTag ? '・' + payerTag : ''}</span>
