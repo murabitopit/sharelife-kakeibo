@@ -306,12 +306,12 @@ main { padding: 12px; max-width: 480px; margin: 0 auto; }
   border-radius: 16px 16px 0 0;
   padding: 16px;
   padding-bottom: 32px;
-  transition: transform 0.2s ease;
+  transition: max-height 0.2s ease;
 }
 /* 収支を記録する入力シート(電卓キーパッド等):高さを抑えて上に余白を残し、
    つまんで下に引き下げて閉じられるよう上端にグリップバーを出す */
 .sheet.sheet-compact {
-  max-height: 65vh;
+  max-height: 80vh;
   padding-top: 22px;
   position: relative;
 }

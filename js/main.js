@@ -98,7 +98,7 @@ function renderApp() {
 function openSheet(html, compact) {
   el.sheet.innerHTML = html;
   el.sheet.classList.toggle('sheet-compact', !!compact);
-  el.sheet.style.transform = '';
+  el.sheet.style.maxHeight = '';
   el.sheet.style.transition = '';
   el.sheetOverlay.classList.add('open');
 }
@@ -673,17 +673,23 @@ function onDragPointerMove(e) {
   unit.style.transform = `translateY(${dy}px)`;
 }
 
-// --- 入力シート(sheet-compact)を上端のグリップバーからつまんで下に引き下げて閉じる ---
-let sheetDragState = null; // { startClientY }
-const SHEET_DISMISS_THRESHOLD = 90; // この距離(px)以上引き下げたら閉じる
+// --- 入力シート(sheet-compact)を上端のグリップバーからつまんで上げ下げする ---
+// 上に引けば高さが広がり(最大SHEET_MAX_VH)、下に引けば縮む。さらに下まで引くと閉じる。
+let sheetDragState = null; // { startClientY, startHeightVh }
+let sheetJustDragged = false; // ドラッグ直後に発火するclickでbackdropが誤って閉じないようにするフラグ
 const SHEET_GRIP_ZONE = 32; // この範囲(px)内から始めたドラッグだけを対象にする
+const SHEET_DEFAULT_VH = 80;
+const SHEET_MAX_VH = 92;
+const SHEET_DISMISS_VH = 40; // 高さがこれを下回ったら閉じる
 
 function onSheetPointerDown(e) {
   if (!el.sheet.classList.contains('sheet-compact')) return;
   const rect = el.sheet.getBoundingClientRect();
   if (e.clientY - rect.top > SHEET_GRIP_ZONE) return;
   e.preventDefault();
-  sheetDragState = { startClientY: e.clientY };
+  const startHeightVh = (rect.height / window.innerHeight) * 100;
+  sheetDragState = { startClientY: e.clientY, startHeightVh };
+  sheetJustDragged = false;
   el.sheet.style.transition = 'none';
   document.addEventListener('pointermove', onSheetPointerMove);
   document.addEventListener('pointerup', onSheetPointerUp, { once: true });
@@ -691,21 +697,25 @@ function onSheetPointerDown(e) {
 
 function onSheetPointerMove(e) {
   if (!sheetDragState) return;
-  const dy = Math.max(0, e.clientY - sheetDragState.startClientY);
-  el.sheet.style.transform = `translateY(${dy}px)`;
+  sheetJustDragged = true;
+  const dyVh = ((e.clientY - sheetDragState.startClientY) / window.innerHeight) * 100;
+  const newVh = Math.min(SHEET_MAX_VH, Math.max(SHEET_DISMISS_VH - 10, sheetDragState.startHeightVh - dyVh));
+  el.sheet.style.maxHeight = `${newVh}vh`;
 }
 
 function onSheetPointerUp(e) {
   if (!sheetDragState) return;
-  const dy = Math.max(0, e.clientY - sheetDragState.startClientY);
+  const dyVh = ((e.clientY - sheetDragState.startClientY) / window.innerHeight) * 100;
+  const endVh = sheetDragState.startHeightVh - dyVh;
   document.removeEventListener('pointermove', onSheetPointerMove);
   el.sheet.style.transition = '';
   sheetDragState = null;
-  if (dy > SHEET_DISMISS_THRESHOLD) {
+  if (endVh < SHEET_DISMISS_VH) {
     closeSheet();
-  } else {
-    el.sheet.style.transform = '';
+    return;
   }
+  const snapVh = endVh > (SHEET_DEFAULT_VH + SHEET_MAX_VH) / 2 ? SHEET_MAX_VH : SHEET_DEFAULT_VH;
+  el.sheet.style.maxHeight = `${snapVh}vh`;
 }
 
 function onDragPointerUp() {
@@ -1133,6 +1143,7 @@ el.tabContent.addEventListener('change', (e) => {
 });
 
 el.sheetOverlay.addEventListener('click', (e) => {
+  if (sheetJustDragged) { sheetJustDragged = false; return; }
   if (e.target === el.sheetOverlay) closeSheet();
 });
 
