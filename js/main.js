@@ -95,8 +95,9 @@ function renderApp() {
   }
 }
 
-function openSheet(html) {
+function openSheet(html, compact) {
   el.sheet.innerHTML = html;
+  el.sheet.classList.toggle('sheet-compact', !!compact);
   el.sheetOverlay.classList.add('open');
 }
 function closeSheet() {
@@ -794,7 +795,7 @@ el.addBtn.addEventListener('click', () => {
   amountDigits = '';
   txType = 'expense';
   txPayer = 'self';
-  openSheet(quickAddHtml());
+  openSheet(quickAddHtml(), true);
 });
 
 el.tabContent.addEventListener('click', (e) => {
@@ -1137,7 +1138,7 @@ el.sheet.addEventListener('click', (e) => {
     pendingCatId = null;
     quickAddParentId = null;
     quickAddTree = 'own';
-    openSheet(quickAddHtml());
+    openSheet(quickAddHtml(), true);
     return;
   }
 
@@ -1152,7 +1153,7 @@ el.sheet.addEventListener('click', (e) => {
       return;
     }
     const isDetail = !!el.sheet.querySelector('#txSaveDetail');
-    openSheet(isDetail ? detailHtml(el.sheet.querySelector('h2[data-cat]').dataset.cat) : quickAddHtml());
+    openSheet(isDetail ? detailHtml(el.sheet.querySelector('h2[data-cat]').dataset.cat) : quickAddHtml(), !isDetail);
     return;
   }
 
@@ -1161,7 +1162,7 @@ el.sheet.addEventListener('click', (e) => {
     pendingCatId = null;
     quickAddParentId = null;
     amountDigits = '';
-    openSheet(quickAddHtml());
+    openSheet(quickAddHtml(), true);
     return;
   }
 
@@ -1169,7 +1170,7 @@ el.sheet.addEventListener('click', (e) => {
   if (treeBack) {
     quickAddTree = 'own';
     quickAddParentId = null;
-    openSheet(quickAddHtml());
+    openSheet(quickAddHtml(), true);
     return;
   }
 
@@ -1179,14 +1180,14 @@ el.sheet.addEventListener('click', (e) => {
     if (pid === '__sharedfund__') { quickAddTree = 'sharedfund'; quickAddParentId = null; }
     else if (pid === '__other__') { quickAddParentId = '__other__'; }
     else { quickAddParentId = pid; }
-    openSheet(quickAddHtml());
+    openSheet(quickAddHtml(), true);
     return;
   }
 
   const backOpt = e.target.closest('[data-back]');
   if (backOpt) {
     quickAddParentId = null;
-    openSheet(quickAddHtml());
+    openSheet(quickAddHtml(), true);
     return;
   }
 
@@ -1194,7 +1195,7 @@ el.sheet.addEventListener('click', (e) => {
   if (leafOpt) {
     pendingCatId = leafOpt.dataset.leaf;
     amountDigits = '';
-    openSheet(quickAddHtml());
+    openSheet(quickAddHtml(), true);
     return;
   }
 

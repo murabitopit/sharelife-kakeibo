@@ -58,6 +58,11 @@
 
 * { box-sizing: border-box; }
 
+html, body {
+  overflow-x: hidden;
+  overscroll-behavior-x: none;
+}
+
 body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", sans-serif;
@@ -285,6 +290,8 @@ main { padding: 12px; max-width: 480px; margin: 0 auto; }
   display: none;
   align-items: flex-end;
   z-index: 30;
+  overscroll-behavior: none;
+  touch-action: pan-y;
 }
 .sheet-overlay.open { display: flex; }
 .sheet {
@@ -293,9 +300,16 @@ main { padding: 12px; max-width: 480px; margin: 0 auto; }
   width: 100%;
   max-height: 86vh;
   overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
   border-radius: 16px 16px 0 0;
   padding: 16px;
   padding-bottom: 32px;
+}
+/* 収支を記録する入力シート(電卓キーパッド等):高さを画面の3/4程度に抑え、上に余白を残す */
+.sheet.sheet-compact {
+  max-height: 75vh;
 }
 
 .sheet h2 { margin: 0 0 12px; font-size: 17px; }
