@@ -98,6 +98,8 @@ function renderApp() {
 function openSheet(html, compact) {
   el.sheet.innerHTML = html;
   el.sheet.classList.toggle('sheet-compact', !!compact);
+  el.sheet.style.transform = '';
+  el.sheet.style.transition = '';
   el.sheetOverlay.classList.add('open');
 }
 function closeSheet() {
@@ -671,6 +673,41 @@ function onDragPointerMove(e) {
   unit.style.transform = `translateY(${dy}px)`;
 }
 
+// --- 入力シート(sheet-compact)を上端のグリップバーからつまんで下に引き下げて閉じる ---
+let sheetDragState = null; // { startClientY }
+const SHEET_DISMISS_THRESHOLD = 90; // この距離(px)以上引き下げたら閉じる
+const SHEET_GRIP_ZONE = 32; // この範囲(px)内から始めたドラッグだけを対象にする
+
+function onSheetPointerDown(e) {
+  if (!el.sheet.classList.contains('sheet-compact')) return;
+  const rect = el.sheet.getBoundingClientRect();
+  if (e.clientY - rect.top > SHEET_GRIP_ZONE) return;
+  e.preventDefault();
+  sheetDragState = { startClientY: e.clientY };
+  el.sheet.style.transition = 'none';
+  document.addEventListener('pointermove', onSheetPointerMove);
+  document.addEventListener('pointerup', onSheetPointerUp, { once: true });
+}
+
+function onSheetPointerMove(e) {
+  if (!sheetDragState) return;
+  const dy = Math.max(0, e.clientY - sheetDragState.startClientY);
+  el.sheet.style.transform = `translateY(${dy}px)`;
+}
+
+function onSheetPointerUp(e) {
+  if (!sheetDragState) return;
+  const dy = Math.max(0, e.clientY - sheetDragState.startClientY);
+  document.removeEventListener('pointermove', onSheetPointerMove);
+  el.sheet.style.transition = '';
+  sheetDragState = null;
+  if (dy > SHEET_DISMISS_THRESHOLD) {
+    closeSheet();
+  } else {
+    el.sheet.style.transform = '';
+  }
+}
+
 function onDragPointerUp() {
   if (!dragState) return;
   const { list, unit } = dragState;
@@ -1100,6 +1137,7 @@ el.sheetOverlay.addEventListener('click', (e) => {
 });
 
 el.sheet.addEventListener('pointerdown', onDragPointerDown);
+el.sheet.addEventListener('pointerdown', onSheetPointerDown);
 
 el.sheet.addEventListener('click', (e) => {
   if (e.target.id === 'txCancel') { closeSheet(); return; }
